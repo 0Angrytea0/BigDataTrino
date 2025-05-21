@@ -1,0 +1,79 @@
+networks:
+  etl-net:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:14
+    container_name: pg
+    environment:
+      POSTGRES_USER: lab_user
+      POSTGRES_PASSWORD: lab_pass
+      POSTGRES_DB: lab_db
+    volumes:
+      - ./исходные данные:/import:ro
+      - ./postgres/first.sql:/docker-entrypoint-initdb.d/first.sql:ro
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - etl-net
+    
+  clickhouse-server:
+    build: 
+      context: .
+      dockerfile: ./init/Dockerfile
+    container_name: clickhouse-server
+    ports:
+      - "9000:9000"
+      - "8123:8123"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./csv:/csv
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    environment:
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=123
+    networks:
+      - etl-net
+
+  trino:
+    image: trinodb/trino:latest
+    container_name: trino
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./sql:/etl
+      - ./trino/config:/etc/trino    
+    networks:
+      - etl-net
+  
+  trino-init:
+    image: trinodb/trino:latest
+    depends_on:
+      - trino
+    volumes:
+      - ./sql:/etl
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # ждём, пока Trino поднимется
+        until trino --server trino:8080 --execute "SHOW CATALOGS" >/dev/null 2>&1; do
+          echo "Ждём Trino…"
+          sleep 5
+        done
+        # выполняем ETL-скрипт
+        trino --server trino:8080 --file /etl/etl.sql
+    networks:
+      - etl-net
+
+  
+
+volumes:
+  pg_data:
+  clickhouse_data:
+
